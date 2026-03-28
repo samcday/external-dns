@@ -16,21 +16,11 @@ while IFS= read -r -d '' file; do
   if [[ "$file" =~ $EXCLUDE_PATTERN ]]; then
     continue
   fi
-  if ! python3 -m json.tool "$file" > /dev/null 2>&1; then
-    echo "FAIL: $file"
-    errors=$((errors + 1))
-  fi
-done < <(find . -name '*.json' -print0)
-
-while IFS= read -r -d '' file; do
-  if [[ "$file" =~ $EXCLUDE_PATTERN ]]; then
-    continue
-  fi
   if ! yq '.' "$file" > /dev/null 2>&1; then
     echo "FAIL: $file"
     errors=$((errors + 1))
   fi
-done < <(find . \( -name '*.yaml' -o -name '*.yml' \) -print0)
+done < <(find . \( -name '*.json' -o -name '*.yaml' -o -name '*.yml' \) -print0)
 
 if [ "$errors" -gt 0 ]; then
   echo ""
