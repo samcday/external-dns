@@ -19,10 +19,13 @@ package webhook
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"time"
 
 	"sigs.k8s.io/external-dns/endpoint"
@@ -105,17 +108,42 @@ func init() {
 
 // New creates a webhook provider from the given configuration.
 func New(ctx context.Context, cfg *externaldns.Config, _ *endpoint.DomainFilter) (provider.Provider, error) {
-	return newProvider(ctx, cfg.WebhookProviderURL, cfg.WebhookProviderReadTimeout, cfg.WebhookProviderWriteTimeout)
+	return newProvider(ctx, cfg.WebhookProviderURL, cfg.WebhookProviderReadTimeout, cfg.WebhookProviderWriteTimeout, cfg.TLSCA, cfg.TLSClientCert, cfg.TLSClientCertKey)
 }
 
-func newProvider(ctx context.Context, u string, readTimeout, writeTimeout time.Duration) (*WebhookProvider, error) {
+func newProvider(ctx context.Context, u string, readTimeout, writeTimeout time.Duration, tlsCA, tlsClientCert, tlsClientCertKey string) (*WebhookProvider, error) {
 	parsedURL, err := url.Parse(u)
 	if err != nil {
 		return nil, err
 	}
 
 	// covers the entire round-trip — writing the request body + waiting for + reading the response
-	client := extdnshttp.NewInstrumentedClient(&http.Client{Timeout: readTimeout + writeTimeout})
+	httpClient := &http.Client{Timeout: readTimeout + writeTimeout}
+
+	if tlsCA != "" || tlsClientCert != "" {
+		tlsConfig := &tls.Config{}
+		if tlsCA != "" {
+			caCert, err := os.ReadFile(tlsCA)
+			if err != nil {
+				return nil, fmt.Errorf("reading webhook TLS CA %q: %w", tlsCA, err)
+			}
+			caCertPool := x509.NewCertPool()
+			if !caCertPool.AppendCertsFromPEM(caCert) {
+				return nil, fmt.Errorf("failed to parse webhook TLS CA certificate from %q", tlsCA)
+			}
+			tlsConfig.RootCAs = caCertPool
+		}
+		if tlsClientCert != "" && tlsClientCertKey != "" {
+			cert, err := tls.LoadX509KeyPair(tlsClientCert, tlsClientCertKey)
+			if err != nil {
+				return nil, fmt.Errorf("loading webhook TLS client cert: %w", err)
+			}
+			tlsConfig.Certificates = []tls.Certificate{cert}
+		}
+		httpClient.Transport = &http.Transport{TLSClientConfig: tlsConfig}
+	}
+
+	client := extdnshttp.NewInstrumentedClient(httpClient)
 
 	// negotiate API information
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
